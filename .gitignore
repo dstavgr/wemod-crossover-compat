@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+private/
+*.exe
+*.dll
+*.asar
+*.original
+*.log
+*.tar
+*.png
+*.zip

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check, apply, or restore the reversible WeMod CrossOver compatibility patch."""
+"""Install, check, apply, or restore the WeMod CrossOver compatibility patch."""
 import argparse
 import hashlib
 import json
@@ -7,6 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import shutil
 import struct
 import tempfile
 
@@ -316,6 +317,173 @@ def locate_crossover(explicit=None):
     return found[0]
 
 
+def discover_bottles(bottles_root):
+    if not bottles_root.is_dir():
+        raise ValueError(f'CrossOver bottle directory not found: {bottles_root}')
+    return sorted(
+        (path for path in bottles_root.iterdir() if path.is_dir() and (path / 'drive_c').is_dir()),
+        key=lambda path: path.name.casefold(),
+    )
+
+
+def is_wemod_app_root(path):
+    targets = files(path)
+    return targets['executable'].is_file() and targets['archive'].is_file()
+
+
+def discover_wemod_apps(bottle_root):
+    drive_c = bottle_root / 'drive_c'
+    candidates = set()
+
+    def consider(path):
+        if is_wemod_app_root(path):
+            candidates.add(path.resolve())
+
+    if not drive_c.is_dir():
+        return []
+    for path in drive_c.iterdir():
+        if path.is_dir() and any(token in path.name.casefold() for token in ('wemod', 'wand')):
+            consider(path)
+            for child in path.glob('app-*'):
+                if child.is_dir():
+                    consider(child)
+    users = drive_c / 'users'
+    if users.is_dir():
+        for user in users.iterdir():
+            local = user / 'AppData/Local'
+            if not local.is_dir():
+                continue
+            for product in ('WeMod', 'Wand', 'Programs/WeMod'):
+                parent = local / product
+                consider(parent)
+                if parent.is_dir():
+                    for child in parent.glob('app-*'):
+                        if child.is_dir():
+                            consider(child)
+    return sorted(candidates, key=lambda path: str(path).casefold())
+
+
+def choose_item(items, labels, prompt, input_fn=None, output=print):
+    if not items:
+        raise ValueError(f'No {prompt.lower()} options are available')
+    if input_fn is None:
+        input_fn = input
+    for index, label in enumerate(labels, 1):
+        output(f'  [{index}] {label}')
+    while True:
+        try:
+            answer = input_fn(f'{prompt} [1-{len(items)}] (q to quit): ').strip()
+        except EOFError as error:
+            raise ValueError('Installation cancelled: no selection was provided') from error
+        if answer.casefold() in {'q', 'quit', 'exit'}:
+            raise ValueError('Installation cancelled')
+        try:
+            selected = int(answer)
+        except ValueError:
+            output('Enter one of the displayed numbers.')
+            continue
+        if 1 <= selected <= len(items):
+            return items[selected - 1]
+        output('Enter one of the displayed numbers.')
+
+
+def next_install_destination(drive_c):
+    names = ['WeMod', 'WeMod-compat']
+    names.extend(f'WeMod-compat-{number}' for number in range(2, 100))
+    for name in names:
+        destination = drive_c / name
+        if not destination.exists():
+            return destination
+    raise ValueError('Could not choose a free WeMod directory in the bottle')
+
+
+def copy_unmodified_app(source, bottle_root):
+    source = source.expanduser().resolve()
+    source_targets = files(source)
+    inspection = inspect_bytes(
+        source_targets['archive'].read_bytes(),
+        source_targets['executable'].read_bytes(),
+    )
+    drive_c = bottle_root / 'drive_c'
+    destination = next_install_destination(drive_c)
+    staging = Path(tempfile.mkdtemp(prefix='.wemod-install-', dir=drive_c))
+    try:
+        # Copy symlink targets so the bottle remains self-contained if the
+        # extracted source uses links on the host filesystem.
+        shutil.copytree(source, staging, dirs_exist_ok=True)
+        os.replace(staging, destination)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return destination, inspection
+
+
+def interactive_install(bottles_root, crossover=None, source=None, requested_bottle=None,
+                        input_fn=None, output=print):
+    if input_fn is None:
+        input_fn = input
+    crossover = locate_crossover(crossover)
+    bottles = discover_bottles(bottles_root)
+    if not bottles:
+        raise ValueError(f'No CrossOver bottles found below {bottles_root}')
+
+    output(f'CrossOver: {crossover}')
+    output(f'Bottles: {bottles_root}')
+    if requested_bottle:
+        matching = [path for path in bottles if path.name == requested_bottle]
+        if not matching:
+            raise ValueError(f'CrossOver bottle not found: {requested_bottle}')
+        bottle_root = matching[0]
+    else:
+        output('\nChoose the bottle that runs your game:')
+        labels = []
+        for bottle in bottles:
+            count = len(discover_wemod_apps(bottle))
+            status = f'WeMod found ({count})' if count else 'WeMod not found'
+            labels.append(f'{bottle.name} — {status}')
+        bottle_root = choose_item(bottles, labels, 'Bottle', input_fn, output)
+
+    output(f'\nSelected bottle: {bottle_root.name}')
+    if source is not None:
+        output(f'Checking clean source: {source.expanduser()}')
+        root, inspection = copy_unmodified_app(source, bottle_root)
+        output(f"Copied {inspection['product']['name']} {inspection['product']['version']} to {root}")
+    else:
+        apps = discover_wemod_apps(bottle_root)
+        if not apps:
+            output('\nNo WeMod application was found in that bottle.')
+            try:
+                raw = input_fn(
+                    'Path to a clean extracted WeMod directory containing WeMod.exe (q to quit): '
+                ).strip()
+            except EOFError as error:
+                raise ValueError('Installation cancelled: no source path was provided') from error
+            if raw.casefold() in {'q', 'quit', 'exit'}:
+                raise ValueError('Installation cancelled')
+            source_path = Path(raw.strip('"').strip("'")).expanduser()
+            root, inspection = copy_unmodified_app(source_path, bottle_root)
+            output(f"Copied {inspection['product']['name']} {inspection['product']['version']} to {root}")
+        elif len(apps) == 1:
+            root = apps[0]
+            output(f'Using detected WeMod application: {root}')
+        else:
+            output('\nChoose the WeMod application to patch:')
+            root = choose_item(apps, [str(path) for path in apps], 'Application', input_fn, output)
+
+    check(root)
+    apply(
+        root,
+        Path(__file__).with_name('bootstrap.js').read_bytes(),
+        Path(__file__).with_name('renderer-bootstrap.js').read_bytes(),
+    )
+    launcher(root, bottle_root.name, crossover, bottles_root)
+    command = root / 'crossover-compat/Launch WeMod.command'
+    output('\nInstallation complete.')
+    output(f'Launch WeMod with:\n  open {shlex.quote(str(command))}')
+    output('Start the store and game from the same CrossOver bottle.')
+    return root
+
+
 def bottle_relative_path(root, bottle, bottles_root):
     prefix = bottles_root / bottle
     try:
@@ -339,9 +507,10 @@ def launcher(root, bottle, crossover, bottles_root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['check', 'apply', 'restore'])
-    parser.add_argument('--app', type=Path, required=True, help='directory containing WeMod.exe')
-    parser.add_argument('--bottle', help='generate a launcher for this CrossOver bottle')
+    parser.add_argument('action', choices=['install', 'check', 'apply', 'restore'])
+    parser.add_argument('--app', type=Path, help='directory containing WeMod.exe')
+    parser.add_argument('--bottle', help='select this CrossOver bottle without a menu')
+    parser.add_argument('--source', type=Path, help='clean extracted WeMod directory for install')
     parser.add_argument('--crossover', type=Path, help='CrossOver.app (auto-detected when omitted)')
     parser.add_argument(
         '--bottles-root', type=Path,
@@ -350,6 +519,22 @@ def main():
     )
     args = parser.parse_args()
     try:
+        bottles_root = args.bottles_root.expanduser()
+        explicit_crossover = args.crossover.expanduser() if args.crossover else None
+        if args.action == 'install':
+            if args.app:
+                raise ValueError('install uses --source for clean files; omit --app')
+            interactive_install(
+                bottles_root,
+                explicit_crossover,
+                args.source,
+                args.bottle,
+            )
+            return
+        if not args.app:
+            raise ValueError(f'{args.action} requires --app')
+        if args.source:
+            raise ValueError('--source is only valid with install')
         root = args.app.expanduser()
         if args.action == 'restore':
             restore(root)
@@ -359,15 +544,15 @@ def main():
             return
         crossover = None
         if args.bottle:
-            crossover = locate_crossover(args.crossover.expanduser() if args.crossover else None)
-            bottle_relative_path(root, args.bottle, args.bottles_root.expanduser())
+            crossover = locate_crossover(explicit_crossover)
+            bottle_relative_path(root, args.bottle, bottles_root)
         apply(
             root,
             Path(__file__).with_name('bootstrap.js').read_bytes(),
             Path(__file__).with_name('renderer-bootstrap.js').read_bytes(),
         )
         if args.bottle:
-            launcher(root, args.bottle, crossover, args.bottles_root.expanduser())
+            launcher(root, args.bottle, crossover, bottles_root)
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, f'Error: {error}\n')
 

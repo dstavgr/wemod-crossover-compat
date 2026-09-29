@@ -2,6 +2,37 @@
 
 Match the visible symptom or exact patcher error before changing the bottle. Reinstalling unrelated components can hide the original failure.
 
+## The easy installer shows no bottles
+
+The default bottle directory is:
+
+```text
+~/Library/Application Support/CrossOver/Bottles
+```
+
+If CrossOver stores bottles elsewhere, run:
+
+```sh
+python3 patch.py install --bottles-root "/path/to/Bottles"
+```
+
+Only directories containing `drive_c` are displayed.
+
+## The selected bottle says `WeMod not found`
+
+This is expected for a new bottle. Enter the macOS path to a clean extracted WeMod application when prompted, or provide it in advance:
+
+```sh
+python3 patch.py install \
+  --source "/path/to/clean/WeMod/application"
+```
+
+The source directory must directly contain `WeMod.exe` and `resources/app.asar`. The installer checks them before copying anything.
+
+## More than one WeMod application is found
+
+The bottle contains multiple candidate directories, commonly an older Wand installation and a separate WeMod copy. The installer displays another numbered menu. Select the application version you intend to run. If the selected package is incompatible, no vendor files are changed.
+
 ## `app.asar is not a WeMod Electron package`
 
 `--app` points at the wrong directory or the package does not identify itself as WeMod.

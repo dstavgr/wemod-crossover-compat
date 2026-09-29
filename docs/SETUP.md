@@ -2,6 +2,39 @@
 
 This guide starts with an existing CrossOver bottle where a Windows game already runs. It uses your current CrossOver installation and does not create or download another version.
 
+## Recommended: interactive installation
+
+Have a clean extracted WeMod application available, then run:
+
+```sh
+git clone https://github.com/dstavgr/wemod-crossover-compat.git
+cd wemod-crossover-compat
+python3 patch.py install
+```
+
+The installer locates CrossOver, lists every bottle, and indicates where WeMod files already exist. Select the bottle that runs the target game.
+
+If WeMod is already in the selected bottle, the installer finds it and applies the patch. If it is absent, paste the host macOS path to the clean extracted application directory containing `WeMod.exe`. The installer verifies that source, copies the complete application into the selected bottle, applies the patch, and generates the launcher.
+
+You can provide the source on the original command:
+
+```sh
+python3 patch.py install \
+  --source "$HOME/Downloads/wemod116/lib/net45"
+```
+
+For a script or a bottle name you already know, skip both prompts:
+
+```sh
+python3 patch.py install \
+  --bottle 'Steam' \
+  --source "$HOME/Downloads/wemod116/lib/net45"
+```
+
+The last output gives the exact `open` command for the generated launcher. The installer does not download vendor files or install Windows prerequisites. Complete section 2 for WeMod 11.6.0 if .NET Framework 4.8 is not already installed in that bottle.
+
+The remaining sections document every step and the equivalent manual commands.
+
 ## 1. Keep WeMod and the game in one bottle
 
 CrossOver gives every bottle a separate Wine prefix and process namespace. WeMod can attach only to a game process in the same bottle.
@@ -37,7 +70,7 @@ Install the prerequisites required by your WeMod build into the game bottle. The
 
 Wine Mono and the modern .NET SDK do not replace native .NET Framework 4.8 for this build. A newer WeMod release may have different prerequisites; follow that release's requirements.
 
-## 3. Place an unmodified WeMod application in the bottle
+## 3. Place an unmodified WeMod application manually
 
 Obtain WeMod from a source you are authorized to use. This repository does not redistribute vendor binaries.
 
@@ -60,6 +93,8 @@ resources/app.asar.unpacked/   # when supplied by that build
 For the verified 11.6.0 package, the application files were inside the package's `lib/net45` directory. In that case, copy the **contents** of `lib/net45`, not the parent directory.
 
 Do not copy a previously patched `WeMod.exe` or `app.asar` into a new bottle. Reuse an unmodified source so each bottle gets its own verified backups and manifest.
+
+Skip this manual copy when using `python3 patch.py install --source ...`; the interactive installer performs it safely and refuses to overwrite an existing directory.
 
 ## 4. Clone the patch and run a read-only check
 

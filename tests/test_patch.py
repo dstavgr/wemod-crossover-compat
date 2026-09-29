@@ -62,6 +62,15 @@ def unpack(archive, name):
     return header, entry, body
 
 
+def write_fixture_app(root, version='99.4.2'):
+    archive, executable, _, _ = fixture(version=version)
+    (root / 'resources').mkdir(parents=True)
+    (root / 'resources/app.asar').write_bytes(archive)
+    (root / 'WeMod.exe').write_bytes(executable)
+    (root / 'support-file.txt').write_text('copied with the application')
+    return archive, executable
+
+
 class PatchTests(unittest.TestCase):
     def test_discovers_nested_main_and_preserves_unrelated_assets(self):
         original, exe, main, renderer = fixture()
@@ -205,6 +214,96 @@ class PatchTests(unittest.TestCase):
             self.assertIn("'C:\\Tools\\WeMod\\WeMod.exe'", command)
             with self.assertRaisesRegex(ValueError, '--app is not inside bottle'):
                 patcher.bottle_relative_path(home / 'elsewhere', 'Any Game', bottles)
+
+    def test_interactive_install_lists_bottles_and_copies_clean_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            crossover = home / 'CrossOver.app'
+            wine = patcher.crossover_wine(crossover)
+            wine.parent.mkdir(parents=True)
+            wine.write_text('')
+            bottles = home / 'Bottles'
+            for name in ('Alpha', 'Beta Game'):
+                (bottles / name / 'drive_c').mkdir(parents=True)
+            source = home / 'Clean WeMod'
+            original_archive, original_executable = write_fixture_app(source, version='88.1.0')
+            output = []
+            answers = iter(['2'])
+
+            installed = patcher.interactive_install(
+                bottles,
+                crossover=crossover,
+                source=source,
+                input_fn=lambda _: next(answers),
+                output=output.append,
+            )
+
+            self.assertEqual(installed, bottles / 'Beta Game/drive_c/WeMod')
+            self.assertTrue((installed / 'crossover-compat/manifest.json').is_file())
+            self.assertTrue((installed / 'crossover-compat/Launch WeMod.command').is_file())
+            self.assertEqual((installed / 'support-file.txt').read_text(), 'copied with the application')
+            self.assertEqual((source / 'resources/app.asar').read_bytes(), original_archive)
+            self.assertEqual((source / 'WeMod.exe').read_bytes(), original_executable)
+            transcript = '\n'.join(output)
+            self.assertIn('[1] Alpha — WeMod not found', transcript)
+            self.assertIn('[2] Beta Game — WeMod not found', transcript)
+            self.assertIn('Selected bottle: Beta Game', transcript)
+            self.assertIn('Installation complete.', transcript)
+            command = (installed / 'crossover-compat/Launch WeMod.command').read_text()
+            self.assertIn("--bottle 'Beta Game'", command)
+
+    def test_discovers_existing_wemod_and_requested_bottle_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bottles = Path(directory) / 'Bottles'
+            bottle = bottles / 'Existing Game'
+            app = bottle / 'drive_c/users/crossover/AppData/Local/WeMod/app-1.2.3'
+            write_fixture_app(app)
+            crossover = Path(directory) / 'CrossOver.app'
+            wine = patcher.crossover_wine(crossover)
+            wine.parent.mkdir(parents=True)
+            wine.write_text('')
+            self.assertEqual(patcher.discover_bottles(bottles), [bottle])
+            self.assertEqual(patcher.discover_wemod_apps(bottle), [app.resolve()])
+            with self.assertRaisesRegex(ValueError, 'bottle not found'):
+                patcher.interactive_install(
+                    bottles,
+                    crossover=crossover,
+                    requested_bottle='Missing',
+                )
+
+    def test_interactive_install_patches_existing_detected_application(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            crossover = root / 'CrossOver.app'
+            wine = patcher.crossover_wine(crossover)
+            wine.parent.mkdir(parents=True)
+            wine.write_text('')
+            bottles = root / 'Bottles'
+            app = bottles / 'GOG Games/drive_c/WeMod116'
+            write_fixture_app(app)
+            output = []
+
+            installed = patcher.interactive_install(
+                bottles,
+                crossover=crossover,
+                requested_bottle='GOG Games',
+                input_fn=lambda _: self.fail('No prompt expected for one detected application'),
+                output=output.append,
+            )
+
+            self.assertEqual(installed, app.resolve())
+            self.assertTrue((app / 'crossover-compat/manifest.json').is_file())
+            self.assertIn('Using detected WeMod application:', '\n'.join(output))
+
+    def test_choose_item_reprompts_and_can_cancel(self):
+        answers = iter(['wrong', '9', '2'])
+        output = []
+        selected = patcher.choose_item(
+            ['a', 'b'], ['Alpha', 'Beta'], 'Bottle', lambda _: next(answers), output.append)
+        self.assertEqual(selected, 'b')
+        self.assertEqual(output.count('Enter one of the displayed numbers.'), 2)
+        with self.assertRaisesRegex(ValueError, 'cancelled'):
+            patcher.choose_item(['a'], ['Alpha'], 'Bottle', lambda _: 'q', output.append)
 
 
 if __name__ == '__main__':

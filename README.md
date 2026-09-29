@@ -62,7 +62,51 @@ The patch:
 
 The launcher uses `--no-sandbox`, which disables Chromium's process sandbox for WeMod. Modifying the executable also invalidates its original Authenticode signature.
 
-## Quick start for any bottle
+## Easy installer
+
+Clone the repository and run the interactive installer:
+
+```sh
+git clone https://github.com/dstavgr/wemod-crossover-compat.git
+cd wemod-crossover-compat
+python3 patch.py install
+```
+
+It displays every detected CrossOver bottle and marks the bottles where WeMod was found:
+
+```text
+Choose the bottle that runs your game:
+  [1] Epic Games Store — WeMod found (2)
+  [2] Steam — WeMod not found
+Bottle [1-2] (q to quit):
+```
+
+After the user chooses a bottle, the installer:
+
+1. uses the existing WeMod application in that bottle, or asks for a clean extracted WeMod directory;
+2. verifies the Electron package before copying or editing anything;
+3. installs clean source files under that bottle's `drive_c` when needed;
+4. applies the compatibility patch and checksum manifest;
+5. creates `crossover-compat/Launch WeMod.command` and prints the launch command.
+
+To supply the clean source in advance while retaining the bottle menu:
+
+```sh
+python3 patch.py install \
+  --source "$HOME/Downloads/wemod116/lib/net45"
+```
+
+To select both values without menus:
+
+```sh
+python3 patch.py install \
+  --bottle 'Steam' \
+  --source "$HOME/Downloads/wemod116/lib/net45"
+```
+
+The installer does not download WeMod or install Windows prerequisites. The verified WeMod 11.6.0 build needs Microsoft .NET Framework 4.8 in the selected bottle.
+
+## Manual installation
 
 Set the bottle name and the directory containing `WeMod.exe`:
 
@@ -128,7 +172,7 @@ python3 -m py_compile patch.py tests/test_patch.py
 node --check renderer-bootstrap.js
 ```
 
-The tests create synthetic ASAR packages. They cover dynamic entry discovery, arbitrary compatible versions, nested paths, entry integrity, embedded executable digests, unrelated asset preservation, v1 manifest migration, repeat application, restoration, update protection, CrossOver discovery, and launcher generation.
+The tests create synthetic ASAR packages. They cover the interactive installer, bottle and application discovery, clean source copying, dynamic entry discovery, arbitrary compatible versions, nested paths, entry integrity, embedded executable digests, unrelated asset preservation, v1 manifest migration, repeat application, restoration, update protection, CrossOver discovery, and launcher generation.
 
 ## Scope
 

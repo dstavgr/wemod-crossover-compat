@@ -1,0 +1,38 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: python -m unittest discover -s tests -v
+      - run: python -m py_compile patch.py tests/test_patch.py
+      - run: node --check renderer-bootstrap.js
+      - name: Validate generated main bootstrap
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import patch
+          rendered = patch.render_bootstrap(
+              Path('bootstrap.js').read_bytes(),
+              Path('renderer-bootstrap.js').read_bytes(),
+          )
+          Path('/tmp/wemod-bootstrap.js').write_bytes(rendered)
+          PY
+          node --check /tmp/wemod-bootstrap.js

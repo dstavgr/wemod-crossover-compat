@@ -1,6 +1,7 @@
 // CrossOver startup compatibility only. No authentication or trainer modifications.
 ;(() => {
   const { app } = require('electron');
+  const rendererBootstrap = __RENDERER_BOOTSTRAP_SOURCE__;
   const fs = require('fs');
   const path = require('path');
   const diagnostics = app.commandLine.hasSwitch('compat-diagnostics');
@@ -35,6 +36,14 @@
   app.on('browser-window-created', (_, win) => {
     const contents = win.webContents;
     const forceWindow = app.commandLine.hasSwitch('compat-force-window');
+    const installRendererBootstrap = () => {
+      contents.executeJavaScript(rendererBootstrap, true)
+        .then(() => log('renderer-bootstrap-installed', { id: win.id }))
+        .catch(error => log('renderer-bootstrap-failed', error.stack || String(error)));
+    };
+    // Register before the application bundle receives this window. This keeps
+    // the renderer fix independent of Webpack's versioned bundle filenames.
+    contents.on('dom-ready', installRendererBootstrap);
     const windowState = () => ({id: win.id, visible: win.isVisible(), minimized: win.isMinimized(), bounds: win.getBounds(), opacity: win.getOpacity(), display: require('electron').screen.getPrimaryDisplay().workArea});
     for (const event of ['show', 'hide', 'focus', 'blur', 'minimize', 'restore']) {
       win.on(event, () => log('window-' + event, windowState()));

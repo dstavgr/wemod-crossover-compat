@@ -2,6 +2,8 @@
 // Some Node internals lazily access stderr while constructing an error; under
 // CrossOver that secondary EBADF aborts WeMod's authenticated dashboard route.
 ;(() => {
+  if (globalThis.__wemodCrossOverStreamsInstalled || typeof process === 'undefined') return;
+  Object.defineProperty(globalThis, '__wemodCrossOverStreamsInstalled', { value: true });
   const makeSink = fd => ({
     fd,
     isTTY: false,

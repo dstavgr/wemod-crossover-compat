@@ -1,35 +1,45 @@
-# WeMod 11.6 compatibility patch for CrossOver 26.3
+# WeMod compatibility patch for CrossOver
 
-This project makes the exact **WeMod 11.6.0** Windows build listed below usable in a 64-bit CrossOver 26.3 bottle on macOS. It patches the local Electron application, preserves a verified backup, and generates a launcher with the rendering flags CrossOver needs.
+[![Test](https://github.com/dstavgr/wemod-crossover-compat/actions/workflows/test.yml/badge.svg)](https://github.com/dstavgr/wemod-crossover-compat/actions/workflows/test.yml)
 
-No WeMod, CrossOver, Microsoft, or game binaries are included.
+This project makes compatible Windows builds of WeMod usable inside an existing CrossOver bottle on macOS. It patches the local Electron package, keeps checksum-verified originals, and generates a launcher with the renderer flags CrossOver needs.
 
-## Verified result
+The patch is **bottle and store independent**. Steam, Epic Games Store, GOG, Ubisoft Connect, Battle.net, and directly launched games use the same workflow: install WeMod in the bottle that runs the game, apply the patch to that copy, then launch both programs in that bottle.
 
-The tested configuration is:
+## What is universal
 
-| Component | Tested configuration |
+The patcher does not depend on a bottle name, game, store, WeMod installation directory, hashed Webpack bundle filename, or fixed Electron main filename. It reads `package.json` from `app.asar`, discovers the main process entry, injects the renderer fix at runtime, finds CrossOver in its common macOS locations, and creates a launcher for the selected bottle.
+
+Future WeMod builds can change their Electron layout. The patcher therefore checks structure before writing:
+
+- `app.asar` must identify itself as WeMod;
+- its declared main entry must be a safe packed path;
+- there must be exactly one compatible primary window configuration;
+- `WeMod.exe` must contain exactly one matching ASAR header digest;
+- an existing installation may match only its saved original or last patched checksums.
+
+`check` performs these tests without modifying files. A structurally compatible but previously unlisted version is reported as such. An incompatible version is rejected rather than patched by guesswork.
+
+## Verified example
+
+The implementation has been verified end to end with:
+
+| Component | Verified configuration |
 | --- | --- |
-| Host | macOS 27 “Golden Gate” |
-| CrossOver | 26.3.0 |
-| Bottle | 64-bit Windows 10 bottle |
+| macOS | 27 “Golden Gate” |
+| CrossOver | 26.3 |
 | WeMod | 11.6.0, Electron 34.0.0 / Chromium 132.0.6834.83 |
-| Game | Total War: WARHAMMER III, Epic Games edition |
-| Game launcher | Epic Games Launcher in the same bottle |
+| Bottle | 64-bit Windows 10 |
+| Store | Epic Games Store |
+| Game | Total War: WARHAMMER III |
 
-Fresh verification reached all of these states:
+The test reached each relevant state: WeMod opened as a visible interactive window, login completed, the dashboard loaded, TWW3 appeared in **My Games**, Epic launched `warhammer3.exe`, and WeMod changed to **Playing** with **Mods are running in the background**.
 
-- WeMod opened as a visible, interactive macOS window from a saved CrossOver launcher.
-- Existing WeMod authentication was refreshed and the dashboard loaded without the former infinite login loop.
-- Total War: WARHAMMER III appeared under **My Games**.
-- Epic launched `warhammer3.exe` and began tracking playtime.
-- WeMod attached to the running process, changed its state to **Playing**, and displayed **Mods are running in the background**.
+The compatibility layer fixes WeMod startup and process attachment. Individual trainer options still depend on the trainer revision, game revision, and the game state where an option is activated.
 
-The compatibility patch fixes application startup and trainer attachment. Individual trainer options still depend on the trainer revision, the game revision, and the point in the game where the option is used.
+## Why this is needed
 
-## Why the patch is needed
-
-The unmodified application reaches unsupported Windows graphics APIs under Wine:
+Unmodified Electron builds can reach Windows graphics APIs that Wine does not implement:
 
 ```text
 DCompositionCreateDevice3 -> E_NOTIMPL
@@ -38,60 +48,49 @@ shared renderer context fails
 window is blank or never becomes usable
 ```
 
-Disabling the GPU alone avoids that crash but does not produce a reliable window. After login, Wine also exposes invalid inherited standard-error handles to Node. Electron then throws `open EBADF` while entering the authenticated dashboard and appears to loop forever.
+Disabling the GPU alone avoids that crash but does not produce a reliable window. Wine can also expose invalid inherited standard output or error handles to Node. That produces `open EBADF` while the authenticated dashboard loads and looks like an infinite login loop.
 
-This patch:
+The patch:
 
 - selects Electron's bundled SwiftShader Vulkan renderer;
-- disables the unsupported DirectComposition path;
-- replaces invalid stdout/stderr handles in Electron's main and renderer processes;
-- changes the main window to a native framed window;
-- shows and raises that window once, then restores its normal window level after 1.5 seconds;
-- recalculates both ASAR entry integrity records and the ASAR header digest embedded in `WeMod.exe`;
-- rejects every unknown WeMod build instead of guessing.
+- disables DirectComposition for WeMod;
+- replaces invalid main and renderer process output streams;
+- gives the main window a native frame;
+- shows and raises the window once, then returns it to normal window level;
+- recalculates ASAR entry integrity and the ASAR header digest embedded in `WeMod.exe`;
+- stores original and patched checksums for repeat application and safe restoration.
 
-The launcher uses `--no-sandbox`, so Chromium's process sandbox is disabled for this application. Updating the executable also invalidates its original Authenticode signature.
+The launcher uses `--no-sandbox`, which disables Chromium's process sandbox for WeMod. Modifying the executable also invalidates its original Authenticode signature.
 
-## Installation
+## Quick start for any bottle
 
-Follow the [complete setup guide](docs/SETUP.md). It covers:
-
-- preparing an existing game bottle;
-- verifying the exact supported WeMod files;
-- applying and restoring the patch;
-- creating a normal CrossOver launcher;
-- the required launch order for Epic/TWW3;
-- installing the same setup into other bottles.
-
-If something fails, use the symptom-based [troubleshooting guide](docs/TROUBLESHOOTING.md).
-
-## Quick start
-
-The following example assumes CrossOver is installed in `~/Applications`, the target bottle is named `Epic Games Store`, and an unmodified WeMod 11.6.0 application is already in `C:\WeMod116` inside that bottle.
+Set the bottle name and the directory containing `WeMod.exe`:
 
 ```sh
 git clone https://github.com/dstavgr/wemod-crossover-compat.git
 cd wemod-crossover-compat
 
-python3 patch.py apply \
-  --app "$HOME/Library/Application Support/CrossOver/Bottles/Epic Games Store/drive_c/WeMod116" \
-  --bottle 'Epic Games Store' \
-  --crossover "$HOME/Applications/CrossOver.app"
+BOTTLE_NAME='Your Game Bottle'
+APP_ROOT="$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE_NAME/drive_c/WeMod"
+
+python3 patch.py check --app "$APP_ROOT"
+python3 patch.py apply --app "$APP_ROOT" --bottle "$BOTTLE_NAME"
+open "$APP_ROOT/crossover-compat/Launch WeMod.command"
 ```
 
-Start the generated launcher:
+CrossOver is auto-detected in `~/Applications/CrossOver.app` and `/Applications/CrossOver.app`. If it is elsewhere, add `--crossover "/path/to/CrossOver.app"` to `apply`.
 
-```sh
-open "$HOME/Library/Application Support/CrossOver/Bottles/Epic Games Store/drive_c/WeMod116/crossover-compat/Launch WeMod.command"
-```
+Do not launch the patched `WeMod.exe` without the generated flags. A plain shortcut can return to the blank-window or DirectComposition failure.
 
-Do not launch `WeMod.exe` without the generated flags. A plain shortcut returns to the blank-window or DirectComposition failure.
+The [complete setup guide](docs/SETUP.md) explains how to identify paths, prepare any bottle, repeat the setup for other bottles, and use the Epic/TWW3 configuration as an example. The [troubleshooting guide](docs/TROUBLESHOOTING.md) is organized by visible symptom.
 
-## Supported files
+## Tested build record
 
-Only this exact build is accepted:
+The following original files are the fully verified reference build:
 
 ```text
+WeMod 11.6.0
+
 WeMod.exe
 2598ca2fba0f24b9f2e955d8dd1a2644be04b648f350adc92e7c266182412bfd
 
@@ -99,39 +98,37 @@ resources/app.asar
 e3dd93c7ebc3cdf092a22564480468bd4748670d4888bd5942cde1b297606b40
 ```
 
-The patcher checks both hashes before writing anything. A refusal is a safety feature; do not remove the check for another release.
+Other versions are accepted only when every structural safety check succeeds. Their acceptance means the package can be patched deterministically; it is not a claim that every application feature has been tested on that version.
 
 ## Restore
 
 Close WeMod, then run:
 
 ```sh
-python3 patch.py restore \
-  --app "$HOME/Library/Application Support/CrossOver/Bottles/Epic Games Store/drive_c/WeMod116"
+python3 patch.py restore --app "$APP_ROOT"
 ```
 
-The patcher restores only `WeMod.exe` and `resources/app.asar`. Account data, .NET, the bottle, games, and save files are untouched.
+Only `WeMod.exe` and `resources/app.asar` are restored. Account data, bottle runtimes, games, and saves are untouched.
 
 ## Diagnostics and privacy
 
-Diagnostics are disabled by default. Add `--compat-diagnostics` after the generated `.command` path to write `crossover-compat/startup.log`:
+Diagnostics are off by default. Add `--compat-diagnostics` after the generated launcher path:
 
 ```sh
-"$HOME/Library/Application Support/CrossOver/Bottles/Epic Games Store/drive_c/WeMod116/crossover-compat/Launch WeMod.command" --compat-diagnostics
+"$APP_ROOT/crossover-compat/Launch WeMod.command" --compat-diagnostics
 ```
 
-Application logs can contain account identifiers or short-lived authentication material. Inspect and redact logs before sharing them. Never commit bottle profiles, cookies, tokens, game saves, vendor binaries, ASAR archives, or diagnostic logs.
+This creates `crossover-compat/startup.log`. Application logs can contain account identifiers or short-lived authentication material. Redact logs before sharing them. Never commit bottle profiles, cookies, tokens, game saves, vendor executables, ASAR archives, or diagnostics.
 
 ## Development checks
 
 ```sh
 python3 -m unittest discover -s tests -v
 python3 -m py_compile patch.py tests/test_patch.py
-node --check bootstrap.js
 node --check renderer-bootstrap.js
 ```
 
-The tests build synthetic ASAR archives. They verify both modified entries, per-block integrity, the executable's embedded header digest, unchanged unrelated assets, repeat application, restoration, and refusal to overwrite unknown files.
+The tests create synthetic ASAR packages. They cover dynamic entry discovery, arbitrary compatible versions, nested paths, entry integrity, embedded executable digests, unrelated asset preservation, v1 manifest migration, repeat application, restoration, update protection, CrossOver discovery, and launcher generation.
 
 ## Scope
 
